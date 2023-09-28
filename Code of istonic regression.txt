@@ -1,0 +1,161 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[1]:
+
+
+import pandas as pd
+import numpy as np
+import seaborn as sns
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+from itertools import combinations
+from collections import Counter
+import pickle
+import random
+from joblib import dump, load
+from matplotlib.backends.backend_pdf import PdfPages
+
+from sklearn import metrics, linear_model
+from sklearn.model_selection import KFold, train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, log_loss, roc_auc_score, confusion_matrix
+from sklearn.feature_selection import SelectFromModel
+
+from imblearn.over_sampling import RandomOverSampler, SMOTE, SMOTEN, ADASYN, BorderlineSMOTE
+from imblearn.combine import SMOTETomek, SMOTEENN
+from matplotlib.backends.backend_pdf import PdfPages
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from xgboost import XGBClassifier, plot_importance
+
+import warnings
+warnings.filterwarnings('ignore')
+
+
+# In[2]:
+
+
+features_select=pd.read_csv('C:/Users/Cola/Desktop/MIMIC1/selection_feature.csv')
+ros = RandomOverSampler(random_state=42, sampling_strategy='auto')
+sme = SMOTE(random_state=42)
+smn = SMOTEN(random_state=43)
+smk = SMOTETomek(random_state=45)
+snn = SMOTEENN(random_state=46)
+bsm = BorderlineSMOTE()
+adn = ADASYN()
+X=features_select.iloc[:,2:]#x的范围是第一列到最后一列
+y=features_select["target"]#括号内是最后一列的名称
+X_train, X_test, y_train, y_test = train_test_split(features_select, features_select['target'], test_size=0.2, random_state=82, stratify=features_select.target)
+x_train = X_train.iloc[:, 2:]
+x_test = X_test.iloc[:, 2:]
+x_bsm, y_bsm = sme.fit_resample(x_train, y_train)
+
+
+# In[3]:
+
+
+from xgboost import XGBClassifier
+clf_XGB = XGBClassifier(colsample_bytree=0.3, gamma=0.01, learning_rate=0.1, max_depth=20, n_estimators=300)
+XGBoost=clf_XGB.fit(x_bsm, y_bsm)
+
+
+# ## Istonic regression
+
+# In[4]:
+
+
+from sklearn.isotonic import IsotonicRegression
+prob_xgb=XGBoost.predict_proba(X)[:, 1].flatten()
+
+
+# In[5]:
+
+
+XGBoost_Iso=IsotonicRegression(y_min=0,y_max=1,out_of_bounds='clip')
+
+
+# In[6]:
+
+
+XGBoost_Iso.fit(prob_xgb,y)
+
+
+# In[7]:
+
+
+def multi_models_roc(names, sampling_methods, colors, X_test, y_test, save=True, dpin=300):
+
+        plt.figure(figsize=(20, 20), dpi=dpin)
+
+        for (name, method, colorname) in zip(names, sampling_methods, colors):
+            
+            y_test_preds = XGBoost.predict(X_test)
+            y_test_predprob = XGBoost_Iso.predict(XGBoost.predict_proba(X_test)[:, 1])
+            fpr, tpr, thresholds = roc_curve(y_test, y_test_predprob, pos_label=1)
+            
+            plt.plot(fpr, tpr, lw=5, label='{} (AUC={:.3f})'.format(name, auc(fpr, tpr)),color = colorname)
+            plt.plot([0, 1], [0, 1], '--', lw=5, color = 'grey')
+            plt.axis('square')
+            plt.xlim([0, 1])
+            plt.ylim([0, 1])
+            plt.xticks(size=20)
+            plt.yticks(size=20)
+            plt.xlabel('False Positive Rate',fontsize=40)
+            plt.ylabel('True Positive Rate',fontsize=40)
+            plt.title('ROC Curve',fontsize=30)
+            plt.legend(loc='lower right',fontsize=30)
+
+        if save:
+            plt.savefig('multi_models_roc.png')
+            
+        return plt
+
+
+# In[8]:
+
+
+import warnings
+warnings.filterwarnings('ignore')
+import pandas as pd
+import numpy as np
+from sklearn.metrics import roc_auc_score,roc_curve,auc
+from sklearn import metrics
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+
+
+# In[9]:
+
+
+names = ['XGBoost_Iso'
+        ]
+
+sampling_methods = [
+                    XGBoost_Iso
+                   ]
+
+colors = [
+          'lawngreen',
+    'orange',
+    'blue',
+     'red'
+         ]
+
+
+# In[9]:
+
+test_roc_graph = multi_models_roc(names, sampling_methods, colors,x_test, y_test, save = True) 
+plt.savefig('XGBISO-test.eps', format='eps',dpi=300)
+
+
+# In[10]:
+
+
+test_roc_graph = multi_models_roc(names, sampling_methods, colors,x_train, y_train, save = True)  # 这里可以改成训练集
+plt.savefig('XGBISO-train.eps', format='eps',dpi=300)
+

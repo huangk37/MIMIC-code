@@ -1,0 +1,506 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[1]:
+
+
+import pandas as pd
+import numpy as np
+import seaborn as sns
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+from itertools import combinations
+from collections import Counter
+import pickle
+import random
+from joblib import dump, load
+from matplotlib.backends.backend_pdf import PdfPages
+
+from sklearn import metrics, linear_model
+from sklearn.model_selection import KFold, train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, log_loss, roc_auc_score, confusion_matrix
+from sklearn.feature_selection import SelectFromModel
+
+from imblearn.over_sampling import RandomOverSampler, SMOTE, SMOTEN, ADASYN, BorderlineSMOTE
+from imblearn.combine import SMOTETomek, SMOTEENN
+from matplotlib.backends.backend_pdf import PdfPages
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from xgboost import XGBClassifier, plot_importance
+
+import warnings
+warnings.filterwarnings('ignore')
+
+
+# ### Read data
+
+# In[63]:
+
+
+data_unique = pd.read_excel('C:/Users/Cola/Desktop/MIMIC1/allfeature.xlsx', sheet_name='2', header=0)
+
+target = data_unique['Hemodynamic deterioration'].map({'wrosen': 1, 'unwrosen': 0})
+data_unique.insert(0, 'target', target)
+
+data_unique['gender'] = data_unique['gender'].map({'F':0, 'M':1})
+
+data_unique.drop(['Hemodynamic deterioration'], axis=1, inplace=True)
+data_unique['target'].value_counts()
+
+
+# In[5]:
+
+
+feats = data_unique.iloc[:, 14:]
+targets = data_unique.iloc[:, :2]
+
+new_data_unique = pd.concat([targets, feats], axis=1)
+
+
+# ### Impute variables with a missing value of less than 20%
+
+# In[6]:
+
+
+ros = RandomOverSampler(random_state=42, sampling_strategy='auto')
+sme = SMOTE(random_state=42)
+smn = SMOTEN(random_state=43)
+smk = SMOTETomek(random_state=45)
+snn = SMOTEENN(random_state=46)
+bsm = BorderlineSMOTE()
+adn = ADASYN()
+
+
+# In[7]:
+
+
+
+def missing_percent(df):
+    nan_percent = 100*(df.isnull().sum()/len(df))
+    return nan_percent
+
+nan_percent = missing_percent(data_unique)
+
+
+nan_percent[nan_percent > 20]
+
+
+# In[8]:
+
+
+import os
+import radiomics
+from sklearn.impute import KNNImputer
+imputer = KNNImputer(n_neighbors=3)
+imputedpt = imputer.fit_transform(new_data_unique)
+datafinal_imputed = pd.DataFrame(imputedpt, columns=new_data_unique.columns)
+datafinal_imputed
+
+
+# ### Conduct Smote to generate dummy variables
+
+# In[16]:
+
+
+X_train, X_test, y_train, y_test = train_test_split(datafinal_imputed, datafinal_imputed['target'], test_size=0.2, random_state=82, stratify=datafinal_imputed.target)
+x_train = X_train.iloc[:, 2:]
+x_test = X_test.iloc[:, 2:]
+
+x_bsm, y_bsm = sme.fit_resample(x_train, y_train)
+
+
+# ###  RandomForest
+
+# In[30]:
+
+
+from sklearn.ensemble import RandomForestClassifier
+RandomForest=RandomForestClassifier(max_depth=10, n_estimators=100)
+RandomForest.fit(x_bsm, y_bsm)
+
+
+# In[31]:
+
+
+RandomForest.score(x_test,y_test)
+
+
+# In[32]:
+
+
+y_rf_predict=RandomForest.predict(x_test)
+from sklearn.metrics import confusion_matrix
+confusion=confusion_matrix(y_test,y_rf_predict)
+confusion
+
+
+# In[33]:
+
+
+TP = confusion[1, 1]
+TN = confusion[0, 0]
+FP = confusion[0, 1]
+FN = confusion[1, 0]
+
+Acc = (TP+TN)/float(TP+TN+FP+FN)
+Sen = TP / float(TP+FN)
+Spe = TN / float(TN+FP)
+Ppv = TP / float(TP+FP)
+Npv = TN / float(TN+FN)
+Tpr = TP / float(TP+FN)
+Fpr = FP / float(FP+TN)
+
+
+# In[34]:
+
+
+Acc,Sen,Spe,Ppv,Npv,Tpr,Fpr
+
+
+# In[35]:
+
+
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import ShuffleSplit
+from sklearn.linear_model import LogisticRegression
+
+
+y_pred_proba = RandomForest.predict_proba(x_test)[:, 1]
+
+auc = roc_auc_score(y_test,y_pred_proba)
+print("AUC score: %.3f" % auc)
+
+
+# In[37]:
+
+
+import numpy as np
+from sklearn import metrics
+from sklearn.utils import resample
+
+
+y_pred_proba = RandomForest.predict_proba(x_test)[:, 1]
+
+
+B = 1000 
+auc_list = []
+for i in range(B):
+    y_test_resampled, y_pred_proba_resampled = resample(y_test, y_pred_proba)
+    auc_list.append(metrics.roc_auc_score(y_test_resampled, y_pred_proba_resampled))
+
+auc_list
+# cacluated 95%CI of AUC
+confidence_interval = 95 # 
+lower = np.percentile(auc_list, (100 - confidence_interval)/2)
+upper = np.percentile(auc_list, confidence_interval + (100 - confidence_interval)/2)
+
+print(f"95% CI is：[{lower:.3f}, {upper:.3f}]")
+
+
+# ###  XGBoost
+
+# In[38]:
+
+
+from xgboost import XGBClassifier
+XGBoost= XGBClassifier(colsample_bytree=0.5, gamma=0.01, learning_rate=0.1, max_depth=15, n_estimators=625)
+XGBoost.fit(x_bsm, y_bsm)
+
+
+# In[39]:
+
+
+y_xgb_predict=XGBoost.predict(x_test)
+
+from sklearn.metrics import confusion_matrix
+confusion=confusion_matrix(y_test,y_xgb_predict)
+confusion
+
+
+# In[40]:
+
+
+TP = confusion[1, 1]
+TN = confusion[0, 0]
+FP = confusion[0, 1]
+FN = confusion[1, 0]
+
+Acc = (TP+TN)/float(TP+TN+FP+FN)
+Sen = TP / float(TP+FN)
+Spe = TN / float(TN+FP)
+Ppv = TP / float(TP+FP)
+Npv = TN / float(TN+FN)
+Tpr = TP / float(TP+FN)
+Fpr = FP / float(FP+TN)
+
+
+# In[41]:
+
+
+Acc,Sen,Spe,Ppv,Npv,Tpr,Fpr
+
+
+# In[42]:
+
+
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import ShuffleSplit
+from sklearn.linear_model import LogisticRegression
+
+
+y_pred_proba = XGBoost.predict_proba(x_test)[:, 1]
+
+auc = roc_auc_score(y_test,y_pred_proba)
+print("AUC score: %.3f" % auc)
+
+
+# In[43]:
+
+
+import numpy as np
+from sklearn import metrics
+from sklearn.utils import resample
+
+
+y_pred_proba = XGBoost.predict_proba(x_test)[:, 1]
+
+B = 1000 
+auc_list = []
+for i in range(B):
+    y_test_resampled, y_pred_proba_resampled = resample(y_test, y_pred_proba)
+    auc_list.append(metrics.roc_auc_score(y_test_resampled, y_pred_proba_resampled))
+
+auc_list
+
+confidence_interval = 95 
+lower = np.percentile(auc_list, (100 - confidence_interval)/2)
+upper = np.percentile(auc_list, confidence_interval + (100 - confidence_interval)/2)
+
+print(f"95% CI is：[{lower:.3f}, {upper:.3f}]")
+
+
+# ### KNN
+
+# In[44]:
+
+
+from sklearn.neighbors import (NeighborhoodComponentsAnalysis, KNeighborsClassifier)
+KNN = KNeighborsClassifier(n_neighbors=8, p=1, weights='distance')
+KNN.fit(x_bsm, y_bsm)
+
+
+# In[45]:
+
+
+y_knn_predict=KNN.predict(x_test)
+from sklearn.metrics import confusion_matrix
+confusion=confusion_matrix(y_test,y_knn_predict)
+confusion
+
+
+# In[46]:
+
+
+TP = confusion[1, 1]
+TN = confusion[0, 0]
+FP = confusion[0, 1]
+FN = confusion[1, 0]
+
+Acc = (TP+TN)/float(TP+TN+FP+FN)
+Sen = TP / float(TP+FN)
+Spe = TN / float(TN+FP)
+Ppv = TP / float(TP+FP)
+Npv = TN / float(TN+FN)
+Tpr = TP / float(TP+FN)
+Fpr = FP / float(FP+TN)
+
+
+# In[47]:
+
+
+Acc,Sen,Spe,Ppv,Npv,Tpr,Fpr
+
+
+# In[48]:
+
+
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import ShuffleSplit
+from sklearn.linear_model import LogisticRegression
+
+
+y_pred_proba = KNN.predict_proba(x_test)[:, 1]
+
+
+auc = roc_auc_score(y_test,y_pred_proba)
+print("AUC score: %.3f" % auc)
+
+
+# In[49]:
+
+
+y_pred_proba = KNN.predict_proba(x_test)[:, 1]
+B = 1000 
+auc_list = []
+for i in range(B):
+    y_test_resampled, y_pred_proba_resampled = resample(y_test, y_pred_proba)
+    auc_list.append(metrics.roc_auc_score(y_test_resampled, y_pred_proba_resampled))
+
+auc_list
+
+confidence_interval = 95 
+lower = np.percentile(auc_list, (100 - confidence_interval)/2)
+upper = np.percentile(auc_list, confidence_interval + (100 - confidence_interval)/2)
+
+print(f"95% CI is：[{lower:.3f}, {upper:.3f}]")
+
+
+# ### LogisticRegression
+
+# In[50]:
+
+
+from sklearn.linear_model import LogisticRegression
+LogisticsRegression = LogisticRegression(C=33, penalty='l1',solver='liblinear',max_iter=10000)
+LogisticsRegression.fit(x_bsm, y_bsm)
+
+
+# In[51]:
+
+
+y_log_predict=LogisticsRegression.predict(x_test)
+from sklearn.metrics import confusion_matrix
+confusion=confusion_matrix(y_test,y_log_predict)
+confusion
+
+
+# In[52]:
+
+
+TP = confusion[1, 1]
+TN = confusion[0, 0]
+FP = confusion[0, 1]
+FN = confusion[1, 0]
+
+Acc = (TP+TN)/float(TP+TN+FP+FN)
+Sen = TP / float(TP+FN)
+Spe = TN / float(TN+FP)
+Ppv = TP / float(TP+FP)
+Npv = TN / float(TN+FN)
+Tpr = TP / float(TP+FN)
+Fpr = FP / float(FP+TN)
+
+
+# In[53]:
+
+
+Acc,Sen,Spe,Ppv,Npv,Tpr,Fpr
+
+
+# In[54]:
+
+
+y_pred_proba = LogisticsRegression.predict_proba(x_test)[:, 1]
+
+B = 1000 
+auc_list = []
+for i in range(B):
+    y_test_resampled, y_pred_proba_resampled = resample(y_test, y_pred_proba)
+    auc_list.append(metrics.roc_auc_score(y_test_resampled, y_pred_proba_resampled))
+
+auc_list
+
+confidence_interval = 95 
+lower = np.percentile(auc_list, (100 - confidence_interval)/2)
+upper = np.percentile(auc_list, confidence_interval + (100 - confidence_interval)/2)
+
+print(f"95% CI is：[{lower:.3f}, {upper:.3f}]")
+
+
+# ### Plot ROC curve
+
+# In[57]:
+
+
+def multi_models_roc(names, sampling_methods, colors, X_test, y_test, save=True, dpin=300):
+
+        plt.figure(figsize=(20, 20), dpi=dpin)
+
+        for (name, method, colorname) in zip(names, sampling_methods, colors):
+            
+            y_test_preds = method.predict(X_test)
+            y_test_predprob = method.predict_proba(X_test)[:,1]
+            fpr, tpr, thresholds = roc_curve(y_test, y_test_predprob, pos_label=1)
+            
+            plt.plot(fpr, tpr, lw=5, label='{} (AUC={:.3f})'.format(name, auc(fpr, tpr)),color = colorname)
+            plt.plot([0, 1], [0, 1], '--', lw=5, color = 'grey')
+            plt.axis('square')
+            plt.xlim([0, 1])
+            plt.ylim([0, 1])
+            plt.xticks(size=20)
+            plt.yticks(size=20)
+            plt.xlabel('False Positive Rate',fontsize=30)
+            plt.ylabel('True Positive Rate',fontsize=30)
+            plt.title('ROC Curve',fontsize=30)
+            plt.legend(loc='lower right',fontsize=20)
+
+        if save:
+            plt.savefig('multi_models_roc.png')
+            
+        return plt
+
+
+# In[58]:
+
+
+import warnings
+warnings.filterwarnings('ignore')
+import pandas as pd
+import numpy as np
+from sklearn.metrics import roc_auc_score,roc_curve,auc
+from sklearn import metrics
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+
+
+# In[60]:
+
+
+names = ['XGBoost',
+        'RandomForest',
+         'KNN',
+         'LogisticRegression'
+        ]
+
+sampling_methods = [
+                    XGBoost,
+    RandomForest,
+    KNN,
+    LogisticsRegression
+                   ]
+
+colors = [
+          'lawngreen',
+    'orange',
+    'blue',
+     'red'
+         ]
+
+
+# In[9]:
+
+test_roc_graph = multi_models_roc(names, sampling_methods, colors,x_test, y_test, save = True)  
+plt.savefig('AllVariables-test.eps', format='eps', dpi=300)
+
+
+# In[61]:
+
+
+test_roc_graph = multi_models_roc(names, sampling_methods, colors, x_train,y_train, save = True)  
+plt.savefig('AllVariables-train.eps', dpi=300)
+

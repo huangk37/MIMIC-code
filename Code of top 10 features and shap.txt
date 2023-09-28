@@ -1,0 +1,412 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[1]:
+
+
+import pandas as pd
+import numpy as np
+import seaborn as sns
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+from itertools import combinations
+from collections import Counter
+import pickle
+import random
+from joblib import dump, load
+from matplotlib.backends.backend_pdf import PdfPages
+
+from sklearn import metrics, linear_model
+from sklearn.model_selection import KFold, train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, log_loss, roc_auc_score, confusion_matrix
+from sklearn.feature_selection import SelectFromModel
+
+from imblearn.over_sampling import RandomOverSampler, SMOTE, SMOTEN, ADASYN, BorderlineSMOTE
+from imblearn.combine import SMOTETomek, SMOTEENN
+from matplotlib.backends.backend_pdf import PdfPages
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from xgboost import XGBClassifier, plot_importance
+
+import warnings
+warnings.filterwarnings('ignore')
+
+
+# In[2]:
+
+
+features_select=pd.read_csv('C:/Users/Cola/Desktop/MIMIC1/selection_feature.csv')
+
+
+# In[3]:
+
+
+ros = RandomOverSampler(random_state=42, sampling_strategy='auto')
+sme = SMOTE(random_state=42)
+smn = SMOTEN(random_state=43)
+smk = SMOTETomek(random_state=45)
+snn = SMOTEENN(random_state=46)
+bsm = BorderlineSMOTE()
+adn = ADASYN()
+X=features_select.iloc[:,2:]#x的范围是第一列到最后一列
+y=features_select["target"]#括号内是最后一列的名称
+X_train, X_test, y_train, y_test = train_test_split(features_select, features_select['target'], test_size=0.2, random_state=82, stratify=features_select.target)
+x_train = X_train.iloc[:, 2:]
+x_test = X_test.iloc[:, 2:]
+x_bsm, y_bsm = sme.fit_resample(x_train, y_train)
+
+
+# ## Simplified XGBoost
+
+# In[5]:
+
+
+from xgboost import XGBClassifier
+clf_XGB = XGBClassifier(colsample_bytree=0.3, gamma=0.01, learning_rate=0.1, max_depth=20, n_estimators=300)
+XGBoost=clf_XGB.fit(x_bsm, y_bsm)
+
+
+# In[6]:
+
+
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import ShuffleSplit
+from sklearn.linear_model import LogisticRegression
+
+
+y_pred_proba = XGBoost.predict_proba(x_test)[:, 1]
+
+XGBoost_auc = roc_auc_score(y_test,y_pred_proba)
+print("AUC score: %.3f" % XGBoost_auc)
+
+
+# In[7]:
+
+
+import numpy as np
+from sklearn import metrics
+from sklearn.utils import resample
+y_pred_proba = XGBoost.predict_proba(x_test)[:, 1]
+
+
+B = 1000 
+auc_list = []
+for i in range(B):
+    y_test_resampled, y_pred_proba_resampled = resample(y_test, y_pred_proba)
+    auc_list.append(metrics.roc_auc_score(y_test_resampled, y_pred_proba_resampled))
+
+auc_list
+
+confidence_interval = 95 
+lower = np.percentile(auc_list, (100 - confidence_interval)/2)
+upper = np.percentile(auc_list, confidence_interval + (100 - confidence_interval)/2)
+
+print(f"95% CI is：[{lower:.3f}, {upper:.3f}]")
+
+
+# In[8]:
+
+
+y_xgb_predict=XGBoost.predict(x_test)
+from sklearn.metrics import confusion_matrix
+confusion=confusion_matrix(y_test,y_xgb_predict)
+confusion
+
+
+# In[9]:
+
+
+TP = confusion[1, 1]
+TN = confusion[0, 0]
+FP = confusion[0, 1]
+FN = confusion[1, 0]
+
+Acc = (TP+TN)/float(TP+TN+FP+FN)
+Sen = TP / float(TP+FN)
+Spe = TN / float(TN+FP)
+Ppv = TP / float(TP+FP)
+Npv = TN / float(TN+FN)
+Tpr = TP / float(TP+FN)
+Fpr = FP / float(FP+TN)
+Acc,Sen,Spe,Ppv,Npv,Tpr,Fpr
+
+
+# ## RandomForest
+
+# In[91]:
+
+
+from sklearn.ensemble import RandomForestClassifier
+clf_RandomForest=RandomForestClassifier(criterion='gini',max_depth= 50,max_features='sqrt',n_estimators=336)
+RandomForest=clf_RandomForest.fit(x_bsm, y_bsm)
+
+
+# In[92]:
+
+
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import ShuffleSplit
+from sklearn.linear_model import LogisticRegression
+
+
+y_pred_proba = RandomForest.predict_proba(x_test)[:, 1]
+
+RandomForest_auc = roc_auc_score(y_test,y_pred_proba)
+print("AUC score: %.3f" % RandomForest_auc)
+
+
+# In[93]:
+
+
+y_pred_proba = RandomForest.predict_proba(x_test)[:, 1]
+
+B = 1000 
+auc_list = []
+for i in range(B):
+    y_test_resampled, y_pred_proba_resampled = resample(y_test, y_pred_proba)
+    auc_list.append(metrics.roc_auc_score(y_test_resampled, y_pred_proba_resampled))
+
+auc_list
+
+confidence_interval = 95 
+lower = np.percentile(auc_list, (100 - confidence_interval)/2)
+upper = np.percentile(auc_list, confidence_interval + (100 - confidence_interval)/2)
+
+print(f"95% CI is：[{lower:.3f}, {upper:.3f}]")
+
+
+# In[94]:
+
+
+y_RandomForest_predict=RandomForest.predict(x_test)
+from sklearn.metrics import confusion_matrix
+confusion=confusion_matrix(y_test,y_RandomForest_predict)
+confusion
+
+
+# In[95]:
+
+
+TP = confusion[1, 1]
+TN = confusion[0, 0]
+FP = confusion[0, 1]
+FN = confusion[1, 0]
+
+Acc = (TP+TN)/float(TP+TN+FP+FN)
+Sen = TP / float(TP+FN)
+Spe = TN / float(TN+FP)
+Ppv = TP / float(TP+FP)
+Npv = TN / float(TN+FN)
+Tpr = TP / float(TP+FN)
+Fpr = FP / float(FP+TN)
+Acc,Sen,Spe,Ppv,Npv,Tpr,Fpr
+
+
+# ## Plot ROC curve
+
+# In[71]:
+
+
+def multi_models_roc(names, sampling_methods, colors, X_test, y_test, save=True, dpin=300):
+        """
+        将多个机器模型的roc图输出到一张图上
+        
+        Args:
+            names: list, 多个模型的名称
+            sampling_methods: list, 多个模型的实例化对象
+            save: 选择是否将结果保存（默认为png格式）
+            
+        Returns:
+            返回图片对象plt
+        """
+        plt.figure(figsize=(20, 20), dpi=dpin)
+
+        for (name, method, colorname) in zip(names, sampling_methods, colors):
+            
+            y_test_preds = method.predict(X_test)
+            y_test_predprob = method.predict_proba(X_test)[:,1]
+            fpr, tpr, thresholds = roc_curve(y_test, y_test_predprob, pos_label=1)
+            
+            plt.plot(fpr, tpr, lw=5, label='{} (AUC={:.3f})'.format(name, auc(fpr, tpr)),color = colorname)
+            plt.plot([0, 1], [0, 1], '--', lw=5, color = 'grey')
+            plt.axis('square')
+            plt.xlim([0, 1])
+            plt.ylim([0, 1])
+            plt.xticks(size=20)
+            plt.yticks(size=20)
+            plt.xlabel('False Positive Rate',fontsize=40)
+            plt.ylabel('True Positive Rate',fontsize=40)
+            plt.title('ROC Curve',fontsize=30)
+            plt.legend(loc='lower right',fontsize=30)
+
+        if save:
+            plt.savefig('multi_models_roc.png')
+            
+        return plt
+
+
+# In[72]:
+
+
+import warnings
+warnings.filterwarnings('ignore')
+import pandas as pd
+import numpy as np
+from sklearn.metrics import roc_auc_score,roc_curve,auc
+from sklearn import metrics
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+
+
+# In[96]:
+
+
+names = ['XGBoost',
+        'RandomForest',
+        ]
+
+sampling_methods = [
+                    XGBoost,
+    RandomForest,
+                   ]
+
+colors = [
+          'lawngreen',
+    'orange',
+    'blue',
+     'red'
+         ]
+
+
+# In[9]:
+
+test_roc_graph = multi_models_roc(names, sampling_methods, colors,x_test, y_test, save = True)  
+plt.savefig('ROCtest-top10.eps', format='eps',dpi=300)
+
+
+# In[74]:
+
+
+test_roc_graph = multi_models_roc(names, sampling_methods, colors,x_train,y_train, save = True)  
+plt.savefig('ROCtrain-top10.eps', format='eps',dpi=300)
+
+
+# ## Draw calibration curve
+
+# In[75]:
+
+
+from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
+from sklearn.calibration import CalibrationDisplay
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import GaussianNB
+import numpy as np
+from sklearn.svm import LinearSVC
+
+class NaivelyCalibratedLinearSVC(LinearSVC):
+    """LinearSVC with `predict_proba` method that naively scales
+    `decision_function` output."""
+ 
+    def fit(self, X, y):
+        super().fit(X, y)
+        df = self.decision_function(X)
+        self.df_min_ = df.min()
+        self.df_max_ = df.max()
+ 
+    def predict_proba(self, X):
+        """Min-max scale output of `decision_function` to [0,1]."""
+        df = self.decision_function(X)
+        calibrated_df = (df - self.df_min_) / (self.df_max_ - self.df_min_)
+        proba_pos_class = np.clip(calibrated_df, 0, 1)
+        proba_neg_class = 1 - proba_pos_class
+        proba = np.c_[proba_neg_class, proba_pos_class]
+        return proba
+
+
+# In[97]:
+
+
+clf_list = [
+    (XGBoost, 'XGBoost'),
+    (RandomForest,'RandomForest'),
+]
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+ 
+fig = plt.figure(figsize=(10, 10))
+gs = GridSpec(4,2)
+colors = plt.cm.get_cmap("Dark2")
+ 
+ax_calibration_curve = fig.add_subplot(gs[:2, :2])
+calibration_displays = {}
+markers = ["^", "v", "s", "o"]
+for i, (clf, name) in enumerate(clf_list):
+    display = CalibrationDisplay.from_estimator(
+        clf,
+        x_test,
+        y_test,
+        n_bins= 8,
+        name=name,
+        ax=ax_calibration_curve,
+        color=colors(i),
+        marker=markers[i],
+    )
+    calibration_displays[name] = display
+ 
+
+ax_calibration_curve.grid()
+ax_calibration_curve.set_title("Calibration plots",fontsize=10)
+plt.savefig('Calibrationtest_top10.eps',format='eps', dpi=300)
+
+
+# ## SHAP
+
+# In[98]:
+
+
+pip install shap
+
+
+# In[99]:
+
+
+import shap
+
+shap.initjs()
+
+
+# In[100]:
+
+
+explainer=shap.Explainer(XGBoost)
+shap_values=explainer(X)
+
+
+# In[101]:
+
+
+shap.summary_plot(shap_values,X,show=False)
+plt.savefig('shapsummary.eps', format='eps')
+
+
+# In[102]:
+
+
+shapbar=shap.plots.bar(shap_values,show=False)
+plt.savefig('shapbar.eps', format='eps')
+
+
+# In[103]:
+
+
+shap.plots.force(explainer.expected_value, shap_values.values[:10])
+
